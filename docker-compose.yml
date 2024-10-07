@@ -1,0 +1,231 @@
+version: '3.8'
+services:
+  # Vault Service
+  vault:
+    image: vault:latest
+    container_name: vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root  # For development purposes
+      VAULT_ADDR: http://vault:8200
+    networks:
+      - microservices-network
+    volumes:
+      - ./vault/config:/vault/config
+      - ./vault/certs:/vault/certs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://vault:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Config Server
+  config-server:
+    build: ./config-server
+    container_name: config-server
+    ports:
+      - "8888:8888"
+    environment:
+      - SPRING_PROFILES_ACTIVE=vault
+      - VAULT_ADDR=http://vault:8200
+      - SPRING_CLOUD_CONFIG_SERVER_GIT_URI=https://github.com/soknem/config-resource.git
+      - VAULT_TOKEN=root
+    depends_on:
+      vault:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://config-server:8888/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Eureka Server
+  eureka-server:
+    build: ./eureka-server
+    container_name: eureka-server
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+    depends_on:
+      config-server:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://eureka-server:8761/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Gateway Server
+  gateway:
+    build: ./gateway
+    container_name: gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+      authorization-service:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://gateway:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Authorization Service (with PostgreSQL)
+  authorization-service:
+    build: ./authorization-service
+    container_name: authorization-service
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://authorization-db:5432/authdb
+    depends_on:
+      config-server:
+        condition: service_healthy
+      authorization-db:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://authorization-service:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  authorization-db:
+    image: postgres:latest
+    container_name: authorization-db
+    environment:
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_password
+      POSTGRES_DB: authdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./authorization-service/postgresql:/docker-entrypoint-initdb.d
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # User Service (with PostgreSQL)
+  user-service:
+    build: ./user-service
+    container_name: user-service
+    ports:
+      - "8082:8082"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://user-db:5432/userdb
+    depends_on:
+      config-server:
+        condition: service_healthy
+      user-db:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://user-service:8082/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-db:
+    image: postgres:latest
+    container_name: user-db
+    environment:
+      POSTGRES_USER: user_user
+      POSTGRES_PASSWORD: user_password
+      POSTGRES_DB: userdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./user-service/postgresql:/docker-entrypoint-initdb.d
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Product Service (with MongoDB)
+  product-service:
+    build: ./product-service
+    container_name: product-service
+    ports:
+      - "8083:8083"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+      - SPRING_DATA_MONGODB_URI=mongodb://product-db:27017/productdb
+    depends_on:
+      config-server:
+        condition: service_healthy
+      product-db:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://product-service:8083/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  product-db:
+    image: mongo:latest
+    container_name: product-db
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./product-service/mongodb:/docker-entrypoint-initdb.d
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Client Server
+  client-server:
+    build: ./client-server
+    container_name: client-server
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${PROFILE}
+      - SPRING_CLOUD_CONFIG_URI=http://config-server:8888
+    depends_on:
+      config-server:
+        condition: service_healthy
+    networks:
+      - microservices-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://client-server:8084/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  microservices-network:
+    driver: bridge

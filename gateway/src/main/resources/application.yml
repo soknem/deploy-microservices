@@ -1,0 +1,168 @@
+spring:
+  profiles:
+    active: dev
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: spring-cloud-gateway
+  config:
+    import: "optional:configserver:"
+  cloud:
+    config:
+      uri: http://localhost:8888
+    gateway:
+      discovery:
+        locator:
+          enabled: false
+          lower-case-service-id: true
+      routes:
+        - id: user-service-route
+          uri: lb://user-service
+          predicates:
+            - Path=/api/v1/users/**
+          filters:
+            - TokenRelay
+            - name: CircuitBreaker
+              args:
+                name: userServiceCircuitBreaker
+                fallbackUri: forward:/fallback/user
+
+        - id: product-service-route
+          uri: lb://product-service
+          predicates:
+            - Path=/api/v1/products/**, /api/v1/files/**
+          filters:
+            - TokenRelay
+            - name: CircuitBreaker
+              args:
+                name: productServiceCircuitBreaker
+                fallbackUri: forward:/fallback/product
+
+        - id: public-route
+          uri: lb://product-service
+          predicates:
+            - Path=/api/v1/public/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: publicServiceCircuitBreaker
+                fallbackUri: forward:/fallback/public
+
+        - id: authorization-server-route
+          uri: lb://authorization-server
+          predicates:
+            - Path=/identity/**
+          filters:
+            - RewritePath=/identity/(?<segment>.*),/$\{segment}
+            - name: CircuitBreaker
+              args:
+                name: authorizationServiceCircuitBreaker
+                fallbackUri: forward:/fallback/authorization
+
+        - id: client-service-route
+          uri: lb://client-service
+          predicates:
+            - Path=/api/v1/clients/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: clientServiceCircuitBreaker
+                fallbackUri: forward:/fallback/client
+            - name: Retry
+              args:
+                retries: 3
+                statuses:
+                  - BAD_GATEWAY
+                  - SERVICE_UNAVAILABLE
+                  - GATEWAY_TIMEOUT
+                methods:
+                  - GET
+                  - POST
+                backoff:
+                  firstBackoff: 200ms
+                  maxBackoff: 1s
+                  backoffFactor: 2.0
+
+    stream:
+      kafka:
+        binder:
+          brokers: 68.183.225.48:9092
+    bus:
+      trace:
+        enabled: true
+      refresh:
+        enabled: true
+      env:
+        enabled: true
+    loadbalancer:
+      stats:
+        micrometer:
+          enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    gateway:
+      enabled: true
+    health:
+      show-details: always
+  zipkin:
+    tracing:
+      endpoint: http://68.183.225.48:9411/api/v2/spans
+  tracing:
+    sampling:
+      probability: 1
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
+
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      userServiceCircuitBreaker:
+        slidingWindowSize: 50
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+      productServiceCircuitBreaker:
+        slidingWindowSize: 50
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+      authorizationServiceCircuitBreaker:
+        slidingWindowSize: 50
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+      clientServiceCircuitBreaker:
+        slidingWindowSize: 50
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+      publicServiceCircuitBreaker:
+        slidingWindowSize: 50
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 5
+        minimumNumberOfCalls: 10
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+
